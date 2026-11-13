@@ -1,0 +1,19 @@
+# Link types, v0 (DESIGN.md §2.2). "type::subtype::subsubtype". Extend in a PR.
+education::degree::bs:      {from: person, to: school_program}
+education::degree::ms:      {from: person, to: school_program}
+education::degree::phd:     {from: person, to: school_program}
+education::degree::mba:     {from: person, to: school_program}
+education::advised_by:      {from: person, to: person}
+research::member_of::lab:   {from: person, to: org}
+research::coauthor:         {from: person, to: person, symmetric: true}
+research::authored:         {from: person, to: work}
+employment::role::employee: {from: person, to: org}
+employment::role::founder:  {from: person, to: org}
+employment::role::partner:  {from: person, to: org}
+employment::role::director: {from: person, to: org}
+employment::role::officer:  {from: person, to: org}
+finance::raised:            {from: org, to: round}
+finance::invested_in:       {from: fund, to: org}
+code::contributor:          {from: person, to: work}
+news::mentioned_with:       {from: person, to: person, symmetric: true}
+derived::same_place_same_time: {from: person, to: person, symmetric: true, derived: true}
