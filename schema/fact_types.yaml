@@ -1,0 +1,22 @@
+# Fact types, v0.2 (docs/DESIGN.md §2.4). "type::subtype". single: a newer fact supersedes the older one.
+education::degree::bs:    {object: org}
+education::degree::ms:    {object: org}
+education::degree::phd:   {object: org}
+education::degree::mba:   {object: org}
+education::advised_by:    {object: person}
+research::coauthor:       {object: person, symmetric: true}
+research::authored:       {object: work}
+research::member_of:      {object: org}
+employment::role:         {object: org}
+employment::current:      {object: org, single: true}
+employment::founder:      {object: org}
+employment::partner:      {object: org}
+employment::director:     {object: org}
+finance::invested_in:     {object: org}
+finance::raised:          {object: event}
+org::part_of:             {object: org}
+news::mentioned_with:     {object: person, symmetric: true}
+self::class_year:         {value: true, single: true}
+self::hometown:           {value: true, single: true}
+self::languages:          {value: true}
+about::field:             {value: true}
