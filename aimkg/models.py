@@ -1,45 +1,37 @@
-"""Records from DESIGN.md §2.1."""
+"""Records (docs/DESIGN.md §2.4)."""
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Trigger = Literal["scheduled", "graph_asks", "person_asks"]
-RequestedBy = Literal["seed", "territory", "task", "person", "refresh"]
+Trigger = Literal["trail", "refresh", "person"]
 
 
-def entity_id(kind: str, name: str, territory: str = "") -> str:
-    digest = hashlib.sha1(f"{kind}|{name.lower().strip()}|{territory}".encode()).hexdigest()[:10]
-    return f"{kind}:{digest}"
-
-
-def top_territory(path: list[str]) -> str:
-    """["1::mit", "2::mit::eecs"] -> "1::mit"."""
-    return path[0] if path else ""
+def entity_id(kind: str, name: str) -> str:
+    return f"{kind}:{hashlib.sha1(f'{kind}|{name.lower().strip()}'.encode()).hexdigest()[:10]}"
 
 
 @dataclass
-class Reason:
-    """Why something is on the frontier. No reason, no lookup."""
-    requested_by: RequestedBy
-    note: str
-    from_entity: str | None = None
-    link_path: str | None = None
-    evidence_id: str | None = None
-
-
-@dataclass
-class EntityRef:
-    """An entity as a source or a claim names it, before resolution."""
+class Ref:
+    """Someone or something a source names, before we know which dossier it is."""
     kind: str
     name: str
-    territory_path: list[str] = field(default_factory=list)
     ids: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
-class Evidence:
+class Reason:
+    """Why a person is on the frontier. No reason, no research."""
+    why: str                         # "co-author of Person B", "seed:openalex", "asked by a user"
+    from_id: str | None = None
+    predicate: str | None = None
+    fact_id: int | None = None
+
+
+@dataclass
+class Record:
+    """What one source returned about one person (kept for provenance)."""
     source: str
     url: str
     payload: dict[str, Any]
@@ -48,20 +40,12 @@ class Evidence:
 
 
 @dataclass
-class Claim:
-    """One fact from one piece of evidence, with the span it came from."""
-    subject: EntityRef
-    predicate: str                     # a link_path, or "attr:<key>"
-    object: EntityRef | Any
-    confidence: float = 0.5
-    span: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class FrontierItem:
-    id: int
-    entity_id: str
-    territory: str
-    reason: Reason
-    score: float
-    hops: int
+class FactDraft:
+    """A fact as extracted, before it's written to a dossier."""
+    subject: Ref
+    predicate: str
+    object: Ref | None = None
+    value: Any = None
+    text: str = ""
+    valid_from: str | None = None
+    confidence: float = 0.8

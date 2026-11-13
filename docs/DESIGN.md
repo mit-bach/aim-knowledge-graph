@@ -1,405 +1,240 @@
 # AIM knowledge graph: high-level and low-level design
 
-**AIM Labs, fall 2026.** Amy Lin, Audrey, Dominik Bach, Rebecca. Draft 0.1, 2026-11-12. It replaces the PRD's pipeline (§6) and agent environment (§7). The PRD still holds the problem, the users, and the data rules.
+**AIM Labs, fall 2026.** Amy Lin, Audrey, Dominik Bach, Rebecca. Draft 0.2, 2026-11-13. It replaces draft 0.1 and the PRD's pipeline and agent sections (§6–§9). The PRD still holds the problem, the users, and the data sources' terms.
 
-**How to read it.** The same marks as the PRD:
+**How to read it:**
 - **[kickoff mm:ss]:** said at the 11-08 kickoff.
-- **[Dominik, 11-12]:** his direction after the PRD.
-- **Proposal:** new in this draft, and not agreed.
+- **[Dominik, date]:** his direction since then.
+- **Proposal:** new in this draft, and not yet agreed by the team.
+
+The levels follow each other: Part 1 is the high-level design, and each system in it opens into a low-level design in Part 2. §2.3 goes one level lower still.
 
 ---
 
 # Part 1. High-level design
 
-## 1.1 What we're building
-
-**We follow the people trail** [Dominik, 11-12].
-- We start from MIT's students [Dominik, 11-12; kickoff 11:23–13:26].
-- For each person, we find as much as public sources allow: who they are, who they're connected to, their background and history.
-- Each connection points to someone or somewhere new: another lab, another college, a company, a fund. We follow it, and repeat.
-- The graph grows outward from MIT into other institutions and companies [kickoff 15:27–17:13]. It's the trail of people, not money, and the bet is that the trail shows where talent and influence actually go.
-
-The deliverable is still the graph, the system that builds and keeps it, and an environment an agent navigates [kickoff 20:50–21:24].
-
-## 1.2 The core problem: the dataset is the world
-
-"The entire dataset is like the world, how do we build that?" [Dominik, 11-12]
-
-**Proposal:** we don't download the world. We **explore** it, and the design rests on four ideas.
-1. **A frontier, not a crawl.** The graph keeps a frontier of people and organizations it has heard of but not yet looked up. Exploring means taking the best item off the frontier, looking it up, and adding what it points to.
-2. **Every lookup has a reason** [Dominik, 11-12: "we need to have a reason to find the data"]. An item gets on the frontier only with a reason: who pointed to it, through which link, from what evidence. Its priority comes from that reason. No reason, no lookup.
-3. **Territories.** The world is split into territories: an institution, then its schools and departments, then its labs and groups. A company or fund works the same way. Each territory has its own agent and its own frontier, so territories explore in parallel. When the trail crosses a border (an MIT student who interned at a trading firm), the territory agent hands the person to the next territory. If that territory doesn't exist yet, the handoff opens it.
-4. **Build, maintain, expand** [kickoff 21:43–22:16]:
-   - Build is the seed.
-   - Maintain is scheduled refresh plus graph checks.
-   - Expand is the frontier, and an agent's question can push something to the front of it.
-
-## 1.3 The systems
-
-**Proposal.** Each of these is a system, drawn as a diamond, that opens into its own frame in the drawing.
+**Following people grows the graph. The graph is what the people trail finds, written as dossiers that agents navigate.** [Dominik, 11-12 and 11-13]
 
 ```
-      ┌──────────── triggers: scheduled · the graph asks · a person asks ────────────┐
-      ▼                                                                              │
- [Sources] ──► [Router] ──► [Evidence archive] ──► [People graph] ◄──► [Agent API] ◄── agent / user
-      ▲                                                  ▲   │              │
-      │                                    territory agents   │              │ request_lookup
-      └─────────────────── frontier lookups (the trail) ──────┘◄─────────────┘
-                                          ▲
-                     [Control]  oversees everything: budget, source rules, health
-                     [Eval]     scores the graph through the agent, with and without it
+                 ┌──────────── a finding in one source can trigger a lookup in another ───────────┐
+                 ▼                                                                                 │
+ [Sources] ◄──► [The trail] ──facts──► [The graph: dossiers + links] ◄──► [The agent's way in] ◄── a person / an agent
+                    ▲                         │      ▲                            │
+                    │                    upkeep (same loop)                        │ "follow this person"
+                    └──────────────────────────────────────────────────────────────┘
+                                         [Evals] score it all against the use cases
 ```
 
-| System | Its job |
-|---|---|
-| **Sources** | The public sources we're allowed to use (PRD §5 and §2.6 below), each with its own triggers. |
-| **Router** | Takes a lookup request (an entity plus a reason) and picks the sources that cover it. It enforces each source's rules and rate limits, and dispatches the lookups. |
-| **Evidence archive** | Stores every fetched document raw, with its source, URL and time. Nothing in the graph exists without evidence here. |
-| **People graph** | The curated graph. An entity doc per person, organization, school, fund and work, with typed links. Each fact cites its evidence. It's split into territories. |
-| **Territory agents** | One per territory. Each owns its frontier, expands it within budget, and hands people across borders. |
-| **Control** | Oversight: the global budget, the source rules, agent health, and the order to split or open territories. |
-| **Eval** | Asks the agent hard questions with and without the graph, and scores correctness and how efficiently it navigated. |
-| **Agent API** | How any frontier model reads the graph (an MCP server). The model can also ask for a lookup when it hits a gap. |
-
-## 1.4 Triggers: why a source gets called
-
-**Proposal.** Three triggers, and nothing else calls a source:
-
-| Trigger | When | Example |
+| System | What it does | Opens into |
 |---|---|---|
-| **Scheduled** | A source's refresh cadence comes due for facts that are going stale. | Re-check SEC filings for a fund every quarter. |
-| **The graph asks** | A territory agent takes a frontier item, or a reference shows up in new evidence. | A thesis names an advisor, so look the advisor up. |
-| **A person asks** | A user, or the agent for them, asks about someone the graph doesn't hold yet. | "Who's behind Fund B?" with Fund B missing, so `request_lookup`. |
+| **Sources** | One connector per allowed source, each a black box behind the same interface. A finding in one source can trigger a lookup in another. | §2.1 |
+| **The trail** | The exploration algorithm, and how the graph propagates. It keeps one frontier of people, each with a reason, picks the next by expected information gain, researches them, and puts everyone they lead to on the frontier. | §2.2, §2.3 |
+| **The graph** | One graph, written as the trail goes. Its unit is the **dossier**: one per person, organization, work or event. Its structure is what the facts say, never the trail's path. | §2.4 |
+| **Upkeep** | Runs in the same loop as the trail: building and keeping the graph are one process. Each new fact revises the dossiers it touches. | §2.5 |
+| **The agent's way in** | An MCP server. It gives starting dossiers, never answers. The agent walks links, with a reason for every read, and can ask the trail to follow someone missing. | §2.6 |
+| **Evals** | Work backwards from the use cases. The graph has to beat an agent with only web search and the sources' raw dumps. | §2.7 |
 
-## 1.5 Territories
-
-**Proposal.**
-- **A territory path** names where an entity lives: `["1::mit", "2::mit::eecs", "3::mit::eecs::csail"]`, or `["1::jane-street"]`.
-- **Levels:**
-  1. institution or company;
-  2. school, department or division;
-  3. lab, group or team.
-- **The territory network.** Territories link to their parent and children. Siblings link when the trail crosses between them often. An agent can wake any territory it links to. Anything further away goes through the chain of links in between.
-- **Opening a territory.** A border item waits in a holding list until enough reasons point at the new territory (say, 10), or a person asks about it. Then Control opens the territory and starts its agent.
-- **Splitting a territory.** When a territory gets too large (say, over 2,000 entities, or a frontier over 500), it splits along its next level down.
-
-## 1.6 One turn of the trail
-
-```
-territory agent pops the highest-priority frontier item  (entity + reason)
-  → Router picks sources that cover it, inside budget and source rules
-  → sources return documents → Evidence archive
-  → Extractor turns evidence into claims (fact + source span + confidence)
-  → Resolver: is this a person we already have? (IDs first, then name + affiliation + years)
-  → People graph: update the entity doc and its links
-  → every new link that points somewhere new → a new frontier item, with its reason
-       inside this territory → this frontier
-       across a border → hand it to that territory (or the holding list)
-  → Analyst rescores the frontier
-```
-
-## 1.7 What we build this month
-
-**Proposal.**
-- **Territories:** three. MIT (EECS first), one more college or institution, and one finance territory (a fund or firm the trail reaches).
-- **Sources:** 4–6 connectors (§2.6).
-- **Agents:** one territory agent per territory, and one Extractor, Resolver and Analyst shared by all.
-- **The Agent API** with all five calls (§2.7), graph checks (§2.8), and an eval A/B (§2.9).
-- **Designed but not built this month:** reviewer tiers above the territory agents, and automatic territory splitting (we split by hand).
+**Why the trail and the structure are kept apart:** "We follow the people to explore and expand upon the graph, but the structure of the graph is not based upon that. It's based on the information that's found when following the people" [Dominik, 11-13]. The trail decides **what gets looked at**. The facts decide **what the graph looks like**. There are no partitions or territories. Any grouping used for navigation, like a research area, a deal network or an alumni cluster, is computed from the links afterwards (§2.4).
 
 ---
 
-# Part 2. Low-level design
+# Part 2. Low-level designs
 
-## 2.1 Data model
+## 2.1 Sources
 
-**Proposal.** All of these are stored records. Every fact points to evidence.
+**Each connector** answers `covers(person)`, `lookup(person, reason)` and its `rules` (what we may store, rate limits, refresh cadence), written from the source's own terms page.
 
-**Entity doc**
-```
-entity {
-  id: str                      # stable, e.g. "person:3f9a…"
-  type: person | org | school_program | fund | round | work | industry
-  name: str
-  desc: str                    # one or two lines, written by the Extractor
-  tags: list[str]              # e.g. ["researcher", "founder"]
-  territory_path: list[str]    # ["1::mit", "2::mit::eecs"]
-  ids: {orcid?, openalex?, wikidata?, dblp?, github?, sec_cik?}
-  attributes: { key: {value, evidence_ids, confidence, valid_from?, valid_to?} }
-  status: referenced | expanded | stale
-  expanded_at: datetime?
-}
-```
+**Three triggers.** Nothing else calls a source.
 
-**Link**
-```
-link {
-  from_id, to_id: str
-  link_path: str               # "type::subtype::subsubtype" (2.2)
-  desc: str                    # "co-authored 'X' (2024)"
-  valid_from?, valid_to?: date
-  evidence_ids: list[str]
-  confidence: float
-}
-```
+| Trigger | When |
+|---|---|
+| **The trail asks** | A person is being researched. |
+| **Refresh** | A dossier's facts are older than their source's cadence. |
+| **A person asks** | Someone (or their agent) asks about a person the graph doesn't hold: `follow_person`. |
 
-**Evidence and claims**
-```
-evidence { id, source, url, fetched_at, content_hash, blob_ref, trigger, reason_id }
-claim    { id, evidence_id, span: {start, end, text}, subject_ref, predicate, object_ref | value, confidence }
-```
+**One source triggers another (proposal).** A lookup can return new IDs, and a new ID makes another source cover the person. For example, OpenAlex gives an ORCID iD, ORCID gives a past role at a fund, and that makes SEC filings cover them. Research keeps fanning out like this until no source has anything new (§2.3).
 
-**Frontier item and reason**
-```
-frontier_item {
-  entity_ref                   # an entity id, or an unresolved name + hints
-  territory_path
-  reason { from_entity, link_path, evidence_id,
-           requested_by: territory | task | person, note }
-  score: float
-  hops_from_seed: int
-  state: queued | holding | in_progress | done | dropped
-}
-```
+**Which sources move the trail.** Checked 2026-11-12 against each source's terms, robots.txt and API docs. Nothing was fetched about anyone. The verdicts are proposals; the PRD's §5 has each source's terms.
 
-**Territory and task**
-```
-territory { path, parent, children, neighbors, agent_id, budget, entity_count, frontier_size, opened_at }
-task      { id, question, user_id, entities_read: list, lookups_requested: list, answer?, score? }
-```
+| Hop | Sources, best first |
+|---|---|
+| person → person | DBLP co-authorship (computer science, IDs already matched up, CC0 dump) · OpenAlex and ORCID · arXiv and Crossref co-authors · DSpace@MIT advisor → student · GitHub co-contributors (noisy) |
+| person → organization | DSpace@MIT department · OpenAlex and ORCID affiliations · GitHub public org membership · MIT News mentions |
+| organization → person | lab rosters (for example CSAIL `/people`) · OpenCourseWare instructors · SEC EDGAR (officers, directors, fund owners) · company team pages |
+| identity | ORCID (lists other IDs) · Wikidata (external IDs) · OpenAlex · DBLP |
 
-## 2.2 Link types: `type::subtype::subsubtype`
+- **This month (proposal):**
+  - OpenAlex, DBLP (the dump), ORCID, Wikidata and SEC EDGAR (the bulk files);
+  - lab rosters, through a single-page fetcher;
+  - DSpace@MIT once MIT Libraries says yes in writing.
+- **One web search per person,** to find their own pages: Tavily, with care (it's free for students), or Brave, used only in the moment, since its terms ban building a database from results. What we store comes from the page found, under that page's terms.
+- **Don't use:** Google Scholar, Exa, Common Crawl for people, Engage, People Data Labs, Proxycurl. LinkedIn and Crunchbase get synthetic stand-ins.
+- **What the sources' rules mean for us:**
+  - GitHub: repo- and org-level edges only, and no commit emails.
+  - A suppressed MIT directory entry is an opt-out.
+  - Firecrawl's terms ban background-check use, so we don't use it for due diligence.
+  - **No inferred protected traits.**
+- **How far "all MIT students" reaches:** the allowed sources reach researchers and graduate students well, and undergraduates thinly. The synthetic layer stands in for undergraduates in statistics.
 
-**Proposal.** A first set, which the team extends:
-
-| link_path | Between | Main sources |
-|---|---|---|
-| `education::degree::{bs,ms,phd,mba}` | person → school_program | Wikidata, ORCID, DSpace theses |
-| `education::advised_by` | person → person | DSpace theses, OpenAlex |
-| `research::member_of::lab` | person → org(lab) | lab pages, OpenAlex affiliations |
-| `research::coauthor` | person ↔ person | OpenAlex, DBLP, arXiv |
-| `research::authored` | person → work | OpenAlex, DBLP, arXiv |
-| `employment::role::{employee,founder,partner,director,officer}` | person → org | SEC filings, company pages, Wikidata |
-| `finance::raised` / `finance::invested_in` | org → round, fund → org | SEC Form D |
-| `code::contributor` | person → work(repo) | GitHub (2.6) |
-| `news::mentioned_with` | person ↔ person/org | GDELT |
-| `derived::same_place_same_time` | person ↔ person | computed by the Analyst, never fetched |
-
-## 2.3 The trail algorithm
-
-**Proposal.** It's "this given algorithm, which is yet to be described" [Dominik, 11-12], written out so the team can change it.
-
-**Seed.** MIT people from allowed seed sources: MIT-affiliated OpenAlex and DBLP authors first, then DSpace@MIT thesis authors and advisors (once MIT Libraries says yes), lab member pages, MIT News, and Wikidata's MIT alumni. Each enters the MIT territory with the reason `seed:<source>`. Students with no public footprint stay unknown. The synthetic layer (PRD §6) stands in for them in statistics.
-
-**`expand(entity)`**, the per-person lookup:
-1. **Identity.** Gather every ID we can reach from the ones we have. ORCID lists other IDs, and Wikidata holds external IDs. IDs make the next lookups exact.
-2. **Plan.** Ask each connector `covers(entity)`, for example "has an ORCID" or "is named in an SEC filing". Order the hits by expected yield over cost.
-3. **Fetch** through the Router: inside rate limits and the source's rules, saved to the Evidence archive.
-4. **Extract** claims with source spans.
-   - The attributes are education, roles, affiliations, works, and what the person states about themselves publicly.
-   - **Demographics: only what the person states publicly, such as class year, hometown, school and languages. We never infer protected traits** (race, religion, health, and the like).
-5. **Resolve and write** to the entity doc and its links.
-6. **Emit the frontier.** Every link to an entity that isn't expanded becomes a frontier item, with the link as its reason.
-
-**Frontier score** (rescored by the Analyst after each turn):
-```
-score = w_r·relevance + w_b·bridging + w_n·novelty + w_e·evidence − w_c·cost
-```
-- `relevance`:
-  - closeness to the seed and to entities that recent tasks read;
-  - × 3 when a task or a person asked for it.
-- `bridging`: 1 if it leads into an unexplored territory or links two territories, else 0.
-- `novelty`: the share of its known links not yet expanded.
-- `evidence`: the confidence of its reasons. Several independent reasons raise it.
-- `cost`: the expected API calls and time for its lookup plan.
-
-Starting weights are all 1. The team tunes them against eval.
-
-**Stopping and budgets:**
-- Each territory has a lookup budget per day. Control sets it.
-- Hops from the seed are capped at 2 inside MIT, and 1 past a border until that territory opens.
-- A territory pauses when its yield (new links per lookup, over the last 50) falls below a threshold.
-
-**Border handoff:** a message from one territory agent to another:
-```
-{ entity_ref, reason, evidence_ids, from_territory, hops, version }
-```
-It goes directly to a linked territory, or through the chain of links in between. A sleeping territory takes in its queued handoffs when it next wakes. A territory that doesn't exist yet gets the item in its holding list.
-
-**Refresh:** each source has a cadence. An expanded entity goes `stale` when its newest evidence is older than its sources' cadence. Stale entities rejoin the frontier with the reason `refresh`.
-
-## 2.4 Components and roles
-
-**Proposal.** Each role is an agent or a module. In the month, roles can share one process.
-
-| Role | In system | Does |
-|---|---|---|
-| Connector (one per source) | Sources | `covers(entity) -> bool`, `lookup(entity, reason) -> list[Evidence]`, `cadence`, `rules` (what may be stored) |
-| Router | Router | Picks connectors, enforces rate limits, budget and rules, and dispatches |
-| Format checker | Evidence archive | Flags evidence that came back broken, empty or in an unexpected format |
-| Extractor | People graph | An LLM turns evidence into claims with spans |
-| Resolver | People graph | Matches by ID, then blocks on (normalized name, affiliation, years), then has an LLM adjudicate. Merges go to a human review queue, and a teammate checks them |
-| Edge builder | People graph | Writes links with the right `link_path`, and derives the `derived::*` links |
-| Classifier | People graph | Keeps tags and link types tidy, and proposes new ones |
-| Territory agent | Territories | Pops its frontier, runs `expand`, and sends and receives handoffs |
-| Cartographer | Territories | Owns the territory scheme: opening, splitting and naming |
-| Analyst | People graph | Frontier scores, talent flows, bridges between territories |
-| Checker | People graph | The graph checks (2.8) |
-| Control | Control | Budget, source rules, agent health. Approves opening and splitting territories |
-| Eval designer and runner | Eval | The question set, A/B runs, scoring |
-
-**File layout note (proposal):** the Evidence archive is laid out by source and date, not by territory. A person moves territories, and their evidence shouldn't have to move with them.
-
-## 2.5 Storage
-
-**Proposal.**
-- **Postgres** holds entities, links, claims, the frontier, territories and tasks. JSONB holds the attributes, and recursive queries handle paths.
-- Raw evidence blobs go in one private store.
-- NetworkX handles analysis.
-- Week 1 can start on SQLite with the same schema.
-- **The raw data stays out of the repo** (PRD §5). The repo holds code, the schema, and synthetic fixtures.
-
-## 2.6 Which source moves the trail
-
-The PRD's §5 lists what each source allows. This section is about the trail: **which allowed source turns a node into its next hops.** It was checked on 2026-11-12 against each source's own terms, robots.txt and API docs. Nothing was fetched about anyone. The verdicts are proposals.
-
-**Ranked by how many reliable edges each gives:**
-
-| Hop | Sources, best first | Notes |
-|---|---|---|
-| **person → person** | DBLP co-authorship (computer science, IDs already matched up, CC0 dump) · OpenAlex and ORCID · arXiv and Crossref co-authors (names only, unless there's an ORCID) · DSpace@MIT advisor → student · GitHub co-contributors | Co-authorship is the backbone of the trail inside MIT. GitHub identities are noisy. |
-| **person → org** | DSpace@MIT department · OpenAlex and ORCID affiliations over time · Crossref affiliations (sparse) · GitHub public org membership · MIT News mentions | MIT News needs entity extraction, and we keep the fact plus a link, not the article. |
-| **org → person** | Lab rosters (for example CSAIL `/people`) · OpenCourseWare course → instructor · SEC EDGAR filings (officers, directors, fund owners) · company team pages | Fetch single pages only when the frontier asks, obeying each site's robots.txt. |
-| **identity** (makes the next hop exact) | ORCID (lists other IDs) · Wikidata (external IDs) · OpenAlex · DBLP | These come first in `expand()`, step 1. |
-
-**Connectors this month (proposal):** OpenAlex, DBLP (the dump, queried locally), ORCID, Wikidata, SEC EDGAR (bulk files) and DSpace@MIT (OAI-PMH, slowly, once MIT Libraries has said yes in writing). Lab rosters come as a single-page fetcher. Synthetic data stands in for LinkedIn and Crunchbase.
-
-**Finding pages about one person** (a search step inside `expand()`):
-- **Tavily**, with care. It's the least restrictive of the live search APIs, and free for students.
-- **Brave**, only in the moment. Its terms ban building a database from search results.
-- Either way, a search result only points at a page. What we store comes from that page, under that page's terms.
-
-**Don't use:**
-- **Google Scholar:** no API, and its terms ban scraping.
-- **Exa:** its terms ban reusing results without written permission.
-- **Google Custom Search** (closed to new users) and the **Bing Search API** (retired).
-- **Common Crawl, for people:** its terms ban harvesting personal data. It's still fine for finding organizations' URLs.
-- **Engage:** student organizations, behind MIT sign-in. Club membership is synthetic.
-- **People Data Labs:** not all from public sources.
-- **Proxycurl:** shut down after LinkedIn sued it.
-
-**Rules the sources impose on the design:**
-- **GitHub:** only repo- and org-level edges. No commit emails. Honour removal requests. Its policies allow research on public, non-personal information, with open-access publications.
-- **DSpace@MIT:** its user agreement bars compiling a database without MIT Libraries' written permission. Ask before harvesting (§2.13).
-- **Firecrawl:** its terms ban background-check use. Don't use it for the due-diligence use. Our own fetcher, which obeys robots.txt, is enough.
-- **MIT directory and FERPA:** students can suppress their directory information. **Treat a suppression as an opt-out:** never fill in a suppressed student's details from other sources.
-- **No inferred protected traits** (race, religion, health, politics). The FTC has acted against selling such inferences. If the team wants demographics, they come from synthetic aggregates or from what people state themselves.
-
-**How much of "all MIT students" this reaches:** the allowed sources reach researchers, graduate students with theses or papers, and anyone with a public professional footprint. Most undergraduates have none in these sources, and Engage and the directory are off-limits for bulk use. **So the trail will be dense for MIT's research community and thin for undergraduates.** The synthetic layer stands in for undergraduates in statistics.
-
-## 2.7 Agent API (MCP)
-
-**Proposal.** A frontier model navigates the graph only through these five calls:
+## 2.2 The trail
 
 ```
-open_task(question: str, user_id: str, task_id: str | None = None)
-  -> init_entities: list[entity_id], required_entities: list[entity_id],
-     task_id: str, default_territory_filter: (include: list[str], exclude: list[str])
-  "Opens a task and returns two sets of entities to read first, and the territory filter
-   every later call uses unless told otherwise."
+G = the graph (dossiers)       F = the frontier: people not yet researched (or stale), each with its reason
 
-get_entities(entity_ids: list[str], default_territory: bool = True)
-  -> { name: (desc, { link_path: count }, territory_path) }
-  "Names, territory paths and link-type counts for a list of entities: what to read next."
-
-read_entity(entity_id: str, default_territory: bool = True,
-            territory_filter: (include, exclude), link_filter: (include, exclude),
-            tag_filter: (include, exclude),
-            link_verbosity: "none" | "description" | "evidence" | "full",
-            reason_for_reading: str)
-  -> { name, desc, tags, territory_path, attributes,
-       links: [ { to: {name, desc, tags, territory_path},
-                  link_path, link_desc, evidence: {source, url, span} } ] }
-
-continue_task(question: str, task_id: str) -> same as open_task
-
-request_lookup(name_or_id: str, reason: str) -> { frontier_item_id, eta }
-  "The graph doesn't hold it: put it on the frontier with this reason."
+seed F with MIT people from allowed sources                  # MIT first [kickoff 15:27]
+while budget remains:
+    p     = select(F)                                        # why this person, now
+    facts = research(p)                                      # §2.3
+    write(G, facts)  and  upkeep(G, facts)                   # §2.4, §2.5: one step
+    for q in people named in facts, not yet researched:
+        F.add(q, reason = the fact that names q)
 ```
 
-- **Relevance order is implicit.** Lists and links come back in order of how useful they've been to past tasks. The order is never shown as a number.
-- Every call logs `reason_for_reading`, which feeds relevance order and eval.
+**`select(F)`: why this person next.** "We need to have a reason to find the data" [Dominik, 11-12]. Every frontier entry carries the fact that put it there. The score is expected information gain (proposal):
 
-## 2.8 Graph checks
+| Term | Raises the score when … |
+|---|---|
+| novelty | most of their neighbourhood is still unknown |
+| bridging | they connect parts of the graph that are otherwise far apart ("the people trail will, I believe, show insightful outcomes" [Dominik, 11-12]) |
+| relevance | they're close to the seed, or someone asked about them (`follow_person` triples it) |
+| evidence | several independent facts point to them |
+| cost (subtracted) | their research needs many calls |
 
-**Proposal.** The Checker runs these after each batch, and nightly:
-- **Broken links:** a link to a missing entity. Find the cause and send it back to the step that made it.
-- **Duplicates:** two people who are likely the same in one territory, sent to the Resolver.
-- **Unsourced facts:** every attribute and link must cite evidence.
-- **Unused tags and link types,** and **empty territories.**
-- **Connectivity:** links within and between territories, and by link type.
-- **Staleness:** the share of expanded entities past refresh.
-- **Spans:** evidence spans inside their length limits.
-- **LLM spot-check:** sample a territory's relevance order and ask whether it makes sense.
+About 1 pick in 10 is random, so the trail doesn't get stuck in one cluster.
 
-## 2.9 Eval
+**Bounds (proposal):**
+- a daily research budget, and a cap per person;
+- relevance decays with hops from the seed;
+- new seeds (another college, a set of firms) are started on purpose, not drifted into;
+- a researched person goes back on the frontier when they go stale.
 
-**Proposal.**
-- **The question set:** 20–40 hard questions across the uses (PRD §2), each with a checked answer. Users' real questions get added over time.
-- **A/B:** the same model and questions, with the Agent API versus with web search only. This shows what the graph adds.
+**Running it:** several explorer agents share the one frontier. Each claims a person, so no two research the same one.
+
+## 2.3 One person's research (lower still)
+
+"This given algorithm, which is yet to be described" [Dominik, 11-12], written out as a proposal. Researching a person answers five questions, in order:
+
+1. **Who is this?** Anchor the identity from what the frontier knows: the name, plus the fact that brought them. Then gather stable IDs (ORCID, OpenAlex, DBLP, Wikidata, GitHub, SEC CIK). **If the match is weak, nothing is written.** The person waits in an ambiguity queue for a teammate to check, because one wrong merge poisons everything downstream.
+2. **Who are they connected with?** Co-authors, advisors and advisees, co-founders, colleagues who overlapped in time and place, co-directors, co-investors.
+3. **What's their background?** Schools, degrees, fields and years.
+4. **What's their history?** Dated roles: where, what, when.
+5. **What do they say about themselves?** Class year, hometown, languages and the like, only as they state them publicly. Never inferred.
+
+**How it searches:**
+- **IDs first:** each ID makes the next source exact.
+- **Fan out** across every source that covers the person, letting one trigger another (§2.1).
+- **Stop when it's dry,** when the last few calls added nothing new.
+
+## 2.4 The graph: dossiers
+
+**The unit is the dossier** [Dominik, 11-13]. There's one per person, organization, work or event.
+- **Self-contained:** an agent can read one dossier and know what the graph knows about its subject.
+- **Every fact lives in its subject's dossier,** with its source (URL, date, the exact span).
+- **Links hang on facts.** The fact "partner at Fund B since 2021" *is* the link to Fund B's dossier. A link never exists without the fact that justifies it.
+- **It's a way in, not a summary.** It points to where to go next.
+
+```
+dossier: Person A                                    (person)
+  ids: orcid 0000-…, openalex A…, dblp …
+  - PhD, MIT EECS, 2019                    → [MIT EECS]        source: DSpace@MIT, 2019
+  - co-author of "X" (2023)                → [Person C]        source: OpenAlex
+  - partner since 2021                     → [Fund B]          source: Form ADV, 2024
+  - says: from Boston; speaks Korean                           source: own page, 2026
+  linked from: [Person C] co-author · [Lab X] member
+```
+
+**Fact types:** a fact's predicate is `type::subtype` (`education::degree::phd`, `research::coauthor`, `employment::partner`, `finance::invested_in`, `self::hometown`, …). Its object is a value or another dossier. The list lives in `schema/fact_types.yaml`, and the team extends it.
+
+**The structure is what the facts say.** Organizations link to each other only as sources state it (a lab is part of a university, a fund invested in a company). **Groupings are computed, not assigned:** clusters over the links (research areas, deal networks, alumni clusters), recomputed as the graph grows. Agents can use them as starting points; they never shape where facts go.
+
+**Storage (proposal):** dossiers render as Markdown for agents, from three tables: entities, facts and sources (`schema/schema.sql`). SQLite in week 1, then Postgres. Raw data about real people never goes in the repo.
+
+## 2.5 Upkeep, in the same loop
+
+When `write(G, facts)` lands new facts, the same step revises what they touch:
+- **Merge:** a person who turns out to be someone we have (a shared ID) is merged, and their facts move to one dossier.
+- **Don't duplicate:** the same fact from a second source adds that source to the fact.
+- **Supersede by date:** a newer fact on a single-valued field (current role, current affiliation) supersedes the older one. The old fact stays, as history.
+- **Checks**, after each batch:
+  - broken links;
+  - facts without a source;
+  - dossiers with no links;
+  - superseded facts still shown as current;
+  - the ambiguity queue's size.
+
+## 2.6 The agent's way in (MCP)
+
+**Proposal.** Starting points, never answers. The agent explores.
+
+```
+open_task(question, user_id, task_id=None)
+  -> task_id, starting_dossiers: list[{id, name, kind, one-line}]
+  "Starting points for this question. Never the answer."
+
+read_dossier(dossier_id, reason, task_id, links="facts" | "names" | "none")
+  -> the dossier: facts with sources, and its links out and in
+  "Every read gives its reason."
+
+next_degree(dossier_ids, task_id, link_types=None)
+  -> the dossiers one link away, each with the fact that links it
+  "Search outward one degree at a time."
+
+follow_person(name, reason, task_id)
+  -> {frontier_entry, state}
+  "The graph doesn't hold them: the trail will follow them."
+
+continue_task(question, task_id) -> like open_task
+```
+
+- **Order is learned, never shown.** Lists come back ordered by how useful dossiers have proven for past tasks and their reasons. The agent never sees a score.
+- **Reasons are logged.** Every read's reason is kept, for that ordering and for evals.
+
+## 2.7 Evals
+
+- **The questions:** 20–40, worked back from the use cases (PRD §2), each with a checked answer where one exists. Users' real questions get added over time.
+- **Three arms (proposal):**
+  1. an agent with only web search and the sources' raw dumps: **the bar to beat**;
+  2. an agent with the graph, starting from default dossiers;
+  3. an agent with the graph, starting from dossiers picked for the question.
 - **Metrics:**
-  - Did it get the checkable answer right?
-  - For open answers, a side-by-side grade.
-  - Navigation efficiency: calls, entities read, tokens, and wasted reads.
-- **No regressions:** a change to the graph or the algorithm has to keep the score from dropping.
+  - right or wrong, where an answer exists;
+  - a judged side-by-side, where it doesn't;
+  - navigation: calls, dossiers read, tokens, and wasted reads.
+- **Every new source is evaluated when it's added:** does it raise the trail's yield (new people and facts per person researched), or the answers?
+- **No regressions:** a change to the trail or the graph has to keep the scores from dropping.
 
-## 2.10 Repo layout
+## 2.8 Data rules
 
-**Proposal.**
-```
-aim-knowledge-graph/
-  docs/        PRD.md, DESIGN.md, decisions/
-  schema/      sql/, link_types.yaml, territories.yaml
-  connectors/  one module per source, with its rules and cadence
-  router/      evidence/   extract/   resolve/   graph/
-  territory/   agent loop, handoffs, cartographer
-  analyst/     scoring, flows        checks/    graph checks
-  api/         MCP server (five calls)
-  eval/        questions/, runner, A/B
-  synthetic/   generator, fixtures (synthetic only)
-  tests/
-```
+- Public data only, gathered only in ways each source allows (§2.1; PRD §5).
+- Synthetic data stands in where a source doesn't allow it. It's flagged, and never mixed with real people's records.
+- Raw data about people never goes in the repo. It lives in one private store.
+- Demographics only as people state them publicly. **Never infer protected traits.**
+- A suppressed directory entry is an opt-out. We remove anyone who asks.
+- Permissions (MIT Libraries for DSpace@MIT, and COUHES) come up when we fetch real data. They aren't a blocker now.
 
-## 2.11 Build order (weeks from the PRD, redone from Thursday 11-12)
+## 2.9 Build plan
 
-**Proposal.**
+**Proposal.** Four weeks, 11-09 to 12-06, with two short syncs a week [kickoff 27:37].
 
 | Week | Build | Done when |
 |---|---|---|
-| **1** (to 11-15) | Agree this design. Make the repo. Schema v0, link types v0, the connector interface, and 2 connectors. | A seed of about 50 MIT people is in the Evidence archive, with reasons. |
-| **2** (11-16 to 11-22) | Extractor, Resolver, graph store, one territory agent (MIT EECS), frontier scoring | The trail runs 2 hops from the seed, and every fact has a source. 20 checked questions. |
-| **3** (11-23 to 11-29, Thanksgiving) | Agent API (five calls), border handoff, the holding list, Control's budget, graph checks | A second territory opens through the trail. A model answers questions through the API. |
-| **4** (11-30 to 12-06) | Third territory (finance), eval A/B, demo | A/B scores, the demo, and the drawing of what got built |
+| **1** (to 11-15) | Agree this design. The repo, the schema, the connector interface, and one real connector each. | The trail runs on synthetic people (it does today), and each connector returns real records for ~20 seed people. |
+| **2** (11-16 to 11-22) | `research(p)` with IDs-first fan-out, extraction from pages, the ambiguity queue, upkeep | The trail runs 2 hops from an MIT seed on real sources, and every fact has a source. 20 checked questions. |
+| **3** (11-23 to 11-29, Thanksgiving) | The agent's way in (MCP), computed groupings, refresh | An agent answers questions through the five calls. |
+| **4** (11-30 to 12-06) | A second seed set (another college or a set of firms), evals in three arms, the demo | Scores against the bar, and the demo. |
 
-## 2.12 Who might take what
-
-**Suggestions only. Each person decides.**
-- **Dominik:** the territory agents and handoffs, the Agent API, and the trail algorithm.
-- **Rebecca:** the finance connectors (SEC), the finance territory, and the use cases.
-- **Audrey:** the Analyst (frontier scoring, flows), and the synthetic layer.
-- **Amy:** the Extractor and Resolver prompts, and eval.
+**Who might take what (suggestions; each person decides):**
+- **Dominik:** the trail (`select`, the frontier, explorers) and the agent's way in.
+- **Rebecca:** the finance sources (SEC) and the finance use cases.
+- **Audrey:** frontier scoring, computed groupings, and the synthetic layer.
+- **Amy:** `research(p)`'s extraction and identity matching, and evals.
 - **Everyone:** one connector each in week 1.
 
-## 2.13 Open questions
+## 2.10 Open questions
 
-1. **The seed:** which MIT sources. Allowed sources reach the research community well and undergraduates thinly (§2.6). Is that the right start?
-2. **Permissions, later.** Two come up when we start fetching real data:
-   - MIT Libraries' written OK to harvest DSpace@MIT (until then, the trail seeds from OpenAlex and DBLP);
-   - whether COUHES (MIT's committee on research with people) needs to see the project.
-
-   Not a blocker now: we deal with them when we get there.
-3. **The scoring weights,** and whether the budget is per territory or global.
-4. **The thresholds** for opening and splitting a territory.
-5. **Storage:** Postgres for everyone from week 1, or SQLite first?
-6. **Which second and third territories:** chosen by the trail, or picked by the team?
-7. **Demographics:** the list of self-stated attributes we keep.
+1. **The seed:** which MIT sources? The allowed ones reach the research community well and undergraduates thinly.
+2. **The scoring weights,** and the size of the daily budget.
+3. **The ambiguity threshold:** how sure is sure enough to write?
+4. **Groupings:** which clusterings help agents start well?
+5. **The second seed set:** another college, or a set of firms?
+6. **Self-stated attributes:** which ones we keep.

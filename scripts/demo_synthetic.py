@@ -1,27 +1,27 @@
-"""Run the people trail on a synthetic world and print what it found. Fake people only."""
+"""Run the trail on a made-up world and show what it found. Fake people only."""
+import random
+
+from aimkg import groupings
+from aimkg.api_core import AgentAPI
 from aimkg.checks import failures, run_checks
-from aimkg.connectors import SyntheticConnector
-from aimkg.control import Control
-from aimkg.models import EntityRef
-from aimkg.router import Router
+from aimkg.config import trail_settings
+from aimkg.connectors import synthetic_sources
+from aimkg.models import Ref
 from aimkg.store import Store
-from aimkg.territory import TerritoryAgent
+from aimkg.trail import Trail
 
 store = Store(":memory:")
-control = Control.from_config(store)
-control.open_threshold = 3
-router = Router(store, control, [SyntheticConnector()])
-agents = {"1::mit": TerritoryAgent("1::mit", store, control, router)}
+trail = Trail(store, synthetic_sources(), trail_settings(), random.Random(0))
 for i in range(1, 6):
-    agents["1::mit"].seed(EntityRef("person", f"Synthetic Person {i:04d}", ["1::mit"]), "seed:synthetic", True)
+    trail.seed(Ref("person", f"Synthetic Person {i:04d}"), "seed: synthetic MIT", synthetic=True)
 
-for round_ in range(5):
-    for t in store.territories():
-        agents.setdefault(t, TerritoryAgent(t, store, control, router)).run(10)
-
-print("territories:", store.territories())
-print("entities:", store.db.execute("SELECT COUNT(*) FROM entities").fetchone()[0],
-      "expanded:", store.db.execute("SELECT COUNT(*) FROM entities WHERE status='expanded'").fetchone()[0])
-print("links:", store.db.execute("SELECT COUNT(*) FROM links").fetchone()[0])
-print("frontier:", store.frontier_counts())
+steps = trail.run(150)
+groups = groupings.compute(store)
+print("researched this run:", len(steps), "| chained into filings:", sum("synthetic-filings" in s.sources_used for s in steps))
+print("graph:", store.counts())
+print("groupings (computed):", len(groups), "| largest:", max(len(v) for v in groups.values()))
 print("check failures:", failures(run_checks(store)) or "none")
+api = AgentAPI(store, trail)
+t = api.open_task("Who is Synthetic Person 0001 connected to?", "demo")
+print()
+print(api.read_dossier(t["starting_dossiers"][0]["id"], "demo: what does the graph know", t["task_id"])["markdown"])

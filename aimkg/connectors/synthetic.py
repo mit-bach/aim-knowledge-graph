@@ -1,68 +1,118 @@
-"""A synthetic source for tests and demos. Every person and organization it makes up is fake,
-and every record it returns is flagged synthetic. It never touches the network.
-
-It gives the trail something to follow before the real connectors are built: people with
-coauthors, advisors and employers, some of them across a territory border.
-"""
+"""Three synthetic sources that chain, the way real ones do (docs/DESIGN.md §2.1):
+a directory gives a scholar ID, the scholar source gives co-authors and sometimes a filer ID,
+and the filings source gives fund and firm roles. Every person and organization is made up,
+every record is flagged synthetic, and nothing touches the network."""
 from __future__ import annotations
 
 import hashlib
 import random
 from typing import Any
 
-from ..models import Evidence, Reason, Trigger
+from ..models import Reason, Record, Trigger
 from .base import Connector, SourceRules
 
-FIRMS = ["synthetic-firm-a", "synthetic-firm-b"]
-COLLEGES = ["synthetic-college-a"]
+RULES = SourceRules(terms_url="(none: synthetic)", rate_per_sec=1e6, daily_limit=10**6,
+                    may_store=["*"], notes="Fake people only. Never mixed with real records.")
 
 
-def _rng(name: str) -> random.Random:
-    return random.Random(int(hashlib.sha1(name.encode()).hexdigest()[:8], 16))
+def _rng(*parts: str) -> random.Random:
+    return random.Random(int(hashlib.sha1("|".join(parts).encode()).hexdigest()[:8], 16))
 
 
-def _person(rng: random.Random, territory: str) -> dict[str, Any]:
-    return {"kind": "person", "name": f"Synthetic Person {rng.randrange(10_000):04d}",
-            "territory_path": [territory]}
+def _person(rng: random.Random) -> dict[str, Any]:
+    return {"kind": "person", "name": f"Synthetic Person {rng.randrange(400):04d}"}
 
 
-class SyntheticConnector(Connector):
-    name = "synthetic"
-    rules = SourceRules(terms_url="(none: synthetic)", rate_per_sec=1000, daily_limit=10_000,
-                        cadence_days=3650, may_store=["*"], notes="Fake people only. Never mixed with real records.")
+def _subject(p: dict[str, Any]) -> dict[str, Any]:
+    return {"kind": "person", "name": p["name"], "ids": p["ids"]}
 
-    def __init__(self, border_rate: float = 0.35) -> None:
-        self.border_rate = border_rate
 
-    def covers(self, entity: dict[str, Any]) -> bool:
-        return bool(entity.get("synthetic")) or entity["name"].startswith("Synthetic ")
+class _Synthetic(Connector):
+    rules = RULES
 
-    def lookup(self, entity: dict[str, Any], reason: Reason, trigger: Trigger) -> list[Evidence]:
-        rng = _rng(entity["name"])
-        territory = entity["territory_path"][0] if entity["territory_path"] else "1::mit"
-        subject = {"kind": entity["type"], "name": entity["name"], "territory_path": entity["territory_path"]}
-        links: list[dict[str, Any]] = []
-        attrs: dict[str, Any] = {}
-        if entity["type"] == "person":
-            attrs = {"desc": f"synthetic researcher in {territory}", "class_year": 2020 + rng.randrange(8)}
-            for _ in range(rng.randrange(1, 4)):
-                links.append({"link_path": "research::coauthor", "object": _person(rng, territory),
-                              "desc": "co-authored a synthetic paper", "confidence": 0.8})
-            links.append({"link_path": "education::advised_by", "object": _person(rng, territory),
-                          "desc": "synthetic thesis advisor", "confidence": 0.9})
-            if rng.random() < self.border_rate:
-                other = rng.choice(FIRMS + COLLEGES)
-                kind = "org"
-                path = "employment::role::employee" if other in FIRMS else "education::degree::ms"
-                links.append({"link_path": path,
-                              "object": {"kind": kind, "name": other.replace("-", " ").title(),
-                                         "territory_path": [f"1::{other}"]},
-                              "desc": "synthetic border crossing", "confidence": 0.7})
-        else:
-            attrs = {"desc": f"synthetic organization {entity['name']}"}
-            for _ in range(rng.randrange(2, 5)):
-                links.append({"link_path": "employment::role::employee", "object": _person(rng, territory),
-                              "desc": "listed on a synthetic team page", "confidence": 0.7, "reverse": True})
-        payload = {"subject": subject, "attributes": attrs, "links": links}
-        return [Evidence(source=self.name, url=f"synthetic://{entity['id']}", payload=payload,
-                         trigger=trigger, synthetic=True)]
+    def _is_synthetic(self, p: dict[str, Any]) -> bool:
+        return bool(p.get("synthetic")) or p["name"].startswith("Synthetic ")
+
+    def _record(self, p: dict[str, Any], trigger: Trigger, payload: dict[str, Any]) -> list[Record]:
+        return [Record(self.name, f"synthetic://{self.name}/{p['id']}", payload, trigger, synthetic=True)]
+
+
+class SyntheticDirectory(_Synthetic):
+    """Who is this: an affiliation, a degree, what they say about themselves, and a scholar ID."""
+    name = "synthetic-directory"
+
+    def __init__(self, ambiguous_share: float = 0.05) -> None:
+        self.ambiguous_share = ambiguous_share
+
+    def covers(self, p):  # anyone synthetic we haven't identified yet
+        return self._is_synthetic(p) and "synth_scholar" not in p["ids"]
+
+    def lookup(self, p, reason, trigger):
+        rng = _rng("dir", p["name"])
+        match = 0.5 if rng.random() < self.ambiguous_share else 0.95
+        lab = {"kind": "org", "name": f"Synthetic Lab {rng.randrange(12)}"}
+        school = {"kind": "org", "name": "MIT"}
+        facts = [
+            {"subject": _subject(p), "predicate": "research::member_of", "object": lab, "text": f"member of {lab['name']}"},
+            {"subject": {"kind": "org", "name": lab["name"]}, "predicate": "org::part_of", "object": school,
+             "text": f"{lab['name']} is part of MIT"},
+            {"subject": _subject(p), "predicate": "education::degree::phd", "object": school,
+             "text": "PhD, MIT", "valid_from": str(2015 + rng.randrange(10))},
+            {"subject": _subject(p), "predicate": "self::class_year", "value": 2015 + rng.randrange(12),
+             "text": "states their class year"},
+        ]
+        return self._record(p, trigger, {"match": match, "ids": {"synth_scholar": f"S{rng.randrange(10**6)}"},
+                                         "facts": facts})
+
+
+class SyntheticScholar(_Synthetic):
+    """Connections: co-authors and an advisor. Sometimes reveals a filer ID (a role at a fund)."""
+    name = "synthetic-scholar"
+
+    def covers(self, p):
+        return self._is_synthetic(p) and "synth_scholar" in p["ids"]
+
+    def lookup(self, p, reason, trigger):
+        rng = _rng("sch", p["ids"]["synth_scholar"])
+        facts = []
+        for _ in range(rng.randrange(1, 4)):
+            c = _person(rng)
+            facts.append({"subject": _subject(p), "predicate": "research::coauthor", "object": c,
+                          "text": f"co-authored a synthetic paper with {c['name']}"})
+        adv = _person(rng)
+        facts.append({"subject": _subject(p), "predicate": "education::advised_by", "object": adv,
+                      "text": f"advised by {adv['name']}"})
+        ids = {"synth_cik": f"C{rng.randrange(10**6)}"} if rng.random() < 0.3 else {}
+        return self._record(p, trigger, {"match": 0.95, "ids": ids, "facts": facts})
+
+
+class SyntheticFilings(_Synthetic):
+    """History in finance: dated roles at funds and firms, and who else sits there."""
+    name = "synthetic-filings"
+
+    def covers(self, p):
+        return self._is_synthetic(p) and "synth_cik" in p["ids"]
+
+    def lookup(self, p, reason, trigger):
+        rng = _rng("fil", p["ids"]["synth_cik"])
+        fund = {"kind": "org", "name": f"Synthetic Fund {rng.randrange(5)}"}
+        firm = {"kind": "org", "name": f"Synthetic Firm {rng.randrange(8)}"}
+        start = 2018 + rng.randrange(6)
+        facts = [
+            {"subject": _subject(p), "predicate": "employment::current", "object": firm,
+             "text": f"worked at {firm['name']}", "valid_from": str(start - 3)},
+            {"subject": _subject(p), "predicate": "employment::current", "object": fund,
+             "text": f"partner at {fund['name']} since {start}", "valid_from": str(start)},
+            {"subject": _subject(p), "predicate": "employment::partner", "object": fund,
+             "text": f"partner at {fund['name']}", "valid_from": str(start)},
+            {"subject": {"kind": "org", "name": fund["name"]}, "predicate": "finance::invested_in", "object": firm,
+             "text": f"{fund['name']} invested in {firm['name']}"},
+        ]
+        co = _person(rng)
+        facts.append({"subject": _subject(p), "predicate": "news::mentioned_with", "object": co,
+                      "text": f"named alongside {co['name']} in a synthetic filing"})
+        return self._record(p, trigger, {"match": 0.95, "ids": {}, "facts": facts})
+
+
+def synthetic_sources(ambiguous_share: float = 0.05) -> list[Connector]:
+    return [SyntheticDirectory(ambiguous_share), SyntheticScholar(), SyntheticFilings()]

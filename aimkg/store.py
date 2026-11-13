@@ -1,7 +1,5 @@
-"""The People graph, the Evidence archive and the frontier, in one SQLite file (week 1).
-
-Raw data about real people never goes in git: point the store at the team's private store.
-"""
+"""The graph: entities and their facts (dossiers), the sources behind them, the frontier, and tasks.
+Point it at the team's private store; raw data about real people never goes in git."""
 from __future__ import annotations
 
 import hashlib
@@ -11,12 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .models import Evidence, FrontierItem, Reason
+from .models import Record, Ref, entity_id
 
-SCHEMA = Path(__file__).resolve().parent.parent / "schema" / "schema.sql"
+ROOT = Path(__file__).resolve().parent.parent
 
 
-def _now() -> str:
+def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -24,167 +22,137 @@ class Store:
     def __init__(self, path: str = ":memory:") -> None:
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
-        self.db.executescript(SCHEMA.read_text())
+        self.db.executescript((ROOT / "schema" / "schema.sql").read_text())
 
-    # ---- territories -------------------------------------------------------
-    def open_territory(self, path: str, parent: str | None = None, budget: int = 200) -> None:
-        self.db.execute("INSERT OR IGNORE INTO territories(path, parent, budget, opened_at) VALUES (?,?,?,?)",
-                        (path, parent, budget, _now()))
-
-    def territory_exists(self, path: str) -> bool:
-        return self.db.execute("SELECT 1 FROM territories WHERE path=?", (path,)).fetchone() is not None
-
-    def territories(self) -> list[str]:
-        return [r["path"] for r in self.db.execute("SELECT path FROM territories ORDER BY opened_at, path")]
-
-    # ---- entities ------------------------------------------------------------
-    def upsert_entity(self, eid: str, kind: str, name: str, territory_path: list[str],
-                      ids: dict[str, str] | None = None, synthetic: bool = False) -> None:
-        row = self.entity(eid)
-        if row is None:
-            self.db.execute(
-                "INSERT INTO entities(id, type, name, territory_path, ids, synthetic) VALUES (?,?,?,?,?,?)",
-                (eid, kind, name, json.dumps(territory_path), json.dumps(ids or {}), int(synthetic)))
-        elif ids:
-            merged = {**row["ids"], **ids}
-            self.db.execute("UPDATE entities SET ids=? WHERE id=?", (json.dumps(merged), eid))
-
-    def set_attribute(self, eid: str, key: str, value: Any, evidence_id: str, confidence: float) -> None:
-        attrs = self.entity(eid)["attributes"]
-        cur = attrs.get(key)
-        if cur and cur["value"] == value:
-            cur["evidence_ids"] = sorted(set(cur["evidence_ids"]) | {evidence_id})
-            cur["confidence"] = max(cur["confidence"], confidence)
-        else:
-            attrs[key] = {"value": value, "evidence_ids": [evidence_id], "confidence": confidence}
-        self.db.execute("UPDATE entities SET attributes=? WHERE id=?", (json.dumps(attrs), eid))
-        if key == "desc":
-            self.db.execute("UPDATE entities SET desc=? WHERE id=?", (str(value), eid))
-
-    def mark_expanded(self, eid: str) -> None:
-        self.db.execute("UPDATE entities SET status='expanded', expanded_at=? WHERE id=?", (_now(), eid))
-
-    def bump_relevance(self, eid: str, by: float = 1.0) -> None:
-        self.db.execute("UPDATE entities SET relevance = relevance + ? WHERE id=?", (by, eid))
-
+    # ---- entities -----------------------------------------------------------------
     def entity(self, eid: str) -> dict[str, Any] | None:
         r = self.db.execute("SELECT * FROM entities WHERE id=?", (eid,)).fetchone()
         if r is None:
             return None
         d = dict(r)
-        for k in ("tags", "territory_path", "ids", "attributes"):
-            d[k] = json.loads(d[k])
+        d["ids"] = json.loads(d["ids"])
+        if d["status"] == "merged" and d["merged_into"]:
+            return self.entity(d["merged_into"])
         return d
 
-    def find_by_ids(self, ids: dict[str, str]) -> str | None:
-        for key, value in ids.items():
-            for r in self.db.execute("SELECT id, ids FROM entities"):
-                if json.loads(r["ids"]).get(key) == value:
-                    return r["id"]
-        return None
-
-    def search(self, words: list[str], limit: int = 5) -> list[str]:
-        if not words:
-            return []
-        clause = " OR ".join("(name LIKE ? OR desc LIKE ?)" for _ in words)
-        args: list[str] = []
-        for w in words:
-            args += [f"%{w}%", f"%{w}%"]
-        rows = self.db.execute(f"SELECT id FROM entities WHERE {clause} ORDER BY relevance DESC, name LIMIT ?",
-                               (*args, limit))
-        return [r["id"] for r in rows]
-
-    # ---- links ---------------------------------------------------------------
-    def add_link(self, from_id: str, to_id: str, link_path: str, desc: str,
-                 evidence_id: str, confidence: float) -> None:
-        row = self.db.execute("SELECT evidence_ids, confidence FROM links WHERE from_id=? AND to_id=? AND link_path=?",
-                              (from_id, to_id, link_path)).fetchone()
-        if row is None:
-            self.db.execute(
-                "INSERT INTO links(from_id, to_id, link_path, desc, evidence_ids, confidence) VALUES (?,?,?,?,?,?)",
-                (from_id, to_id, link_path, desc, json.dumps([evidence_id]), confidence))
-        else:
-            ev = sorted(set(json.loads(row["evidence_ids"])) | {evidence_id})
-            self.db.execute("UPDATE links SET evidence_ids=?, confidence=? WHERE from_id=? AND to_id=? AND link_path=?",
-                            (json.dumps(ev), max(row["confidence"], confidence), from_id, to_id, link_path))
-
-    def links_of(self, eid: str) -> list[dict[str, Any]]:
-        rows = self.db.execute(
-            "SELECT l.*, e.relevance AS to_rel FROM links l JOIN entities e ON e.id = "
-            "CASE WHEN l.from_id=? THEN l.to_id ELSE l.from_id END "
-            "WHERE l.from_id=? OR l.to_id=? ORDER BY to_rel DESC, l.id", (eid, eid, eid))
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["evidence_ids"] = json.loads(d["evidence_ids"])
-            d["other"] = d["to_id"] if d["from_id"] == eid else d["from_id"]
-            out.append(d)
-        return out
-
-    # ---- evidence ------------------------------------------------------------
-    def add_evidence(self, ev: Evidence, reason: Reason) -> str:
-        body = json.dumps(ev.payload, sort_keys=True)
-        h = hashlib.sha256(body.encode()).hexdigest()
-        eid = f"ev:{ev.source}:{h[:12]}"
-        self.db.execute(
-            "INSERT OR IGNORE INTO evidence(id, source, url, fetched_at, content_hash, payload, trigger, reason, synthetic)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (eid, ev.source, ev.url, _now(), h, body, ev.trigger, json.dumps(reason.__dict__), int(ev.synthetic)))
+    def resolve(self, ref: Ref, synthetic: bool = False) -> str:
+        """IDs first; then kind + exact name (week 1). Week 2 adds affiliation and years."""
+        for key, val in ref.ids.items():
+            hit = self.db.execute("SELECT id FROM entities WHERE status!='merged' AND json_extract(ids, ?)=?",
+                                  (f"$.{key}", val)).fetchone()
+            if hit:
+                self.add_ids(hit["id"], ref.ids)
+                return hit["id"]
+        eid = entity_id(ref.kind, ref.name)
+        existing = self.entity(eid)
+        if existing:
+            self.add_ids(existing["id"], ref.ids)
+            return existing["id"]
+        self.db.execute("INSERT INTO entities(id, kind, name, ids, synthetic) VALUES (?,?,?,?,?)",
+                        (eid, ref.kind, ref.name, json.dumps(ref.ids), int(synthetic)))
         return eid
 
-    def evidence(self, evid: str) -> dict[str, Any] | None:
-        r = self.db.execute("SELECT * FROM evidence WHERE id=?", (evid,)).fetchone()
+    def add_ids(self, eid: str, ids: dict[str, str]) -> list[str]:
+        """Add IDs to a dossier. If another dossier already holds one of them, merge it in."""
+        if not ids:
+            return []
+        e = self.entity(eid)
+        merged = []
+        for key, val in ids.items():
+            for r in self.db.execute("SELECT id FROM entities WHERE id!=? AND status!='merged' AND json_extract(ids, ?)=?",
+                                     (e["id"], f"$.{key}", val)).fetchall():
+                self.merge(r["id"], e["id"])
+                merged.append(r["id"])
+        e = self.entity(eid)
+        self.db.execute("UPDATE entities SET ids=? WHERE id=?", (json.dumps({**e["ids"], **ids}), e["id"]))
+        return merged
+
+    def merge(self, loser: str, winner: str) -> None:
+        """Upkeep: two dossiers are one person. Move the facts, keep a pointer."""
+        self.db.execute("UPDATE facts SET subject_id=? WHERE subject_id=?", (winner, loser))
+        self.db.execute("UPDATE facts SET object_id=? WHERE object_id=?", (winner, loser))
+        self.db.execute("UPDATE frontier SET state='done' WHERE person_id=? AND state='queued'", (loser,))
+        self.db.execute("UPDATE entities SET status='merged', merged_into=? WHERE id=?", (winner, loser))
+
+    def set_status(self, eid: str, status: str) -> None:
+        extra = ", researched_at=?" if status == "researched" else ""
+        args = (status, now(), eid) if extra else (status, eid)
+        self.db.execute(f"UPDATE entities SET status=?{extra} WHERE id=?", args)
+
+    def bump_usefulness(self, eid: str, by: float = 1.0) -> None:
+        self.db.execute("UPDATE entities SET usefulness = usefulness + ? WHERE id=?", (by, eid))
+
+    def search(self, words: list[str], limit: int = 5) -> list[str]:
+        """Dossiers whose names match the most words, then the most useful."""
+        if not words:
+            return []
+        clause = " OR ".join("name LIKE ?" for _ in words)
+        rows = self.db.execute(f"SELECT id, name, usefulness FROM entities WHERE status!='merged' AND ({clause})",
+                               [f"%{w}%" for w in words]).fetchall()
+        lw = [w.lower() for w in words]
+        ranked = sorted(rows, key=lambda r: (-sum(w in r["name"].lower() for w in lw), -r["usefulness"], r["name"]))
+        return [r["id"] for r in ranked[:limit]]
+
+    # ---- sources ------------------------------------------------------------------
+    def add_source(self, rec: Record) -> str:
+        body = json.dumps(rec.payload, sort_keys=True)
+        h = hashlib.sha256(body.encode()).hexdigest()
+        sid = f"src:{rec.source}:{h[:12]}"
+        self.db.execute("INSERT OR IGNORE INTO sources(id, source, url, fetched_at, content_hash, payload, trigger, synthetic)"
+                        " VALUES (?,?,?,?,?,?,?,?)", (sid, rec.source, rec.url, now(), h, body, rec.trigger, int(rec.synthetic)))
+        return sid
+
+    def source(self, sid: str) -> dict[str, Any] | None:
+        r = self.db.execute("SELECT id, source, url, fetched_at FROM sources WHERE id=?", (sid,)).fetchone()
         return dict(r) if r else None
 
-    # ---- frontier ------------------------------------------------------------
-    def push_frontier(self, entity_id: str, territory: str, reason: Reason, score: float,
-                      hops: int, state: str = "queued") -> int | None:
-        dup = self.db.execute("SELECT id FROM frontier WHERE entity_id=? AND state IN ('queued','holding','in_progress')",
-                              (entity_id,)).fetchone()
-        if dup:
-            # another independent reason for the same entity: count it, and raise its score a little
-            self.db.execute("UPDATE frontier SET n_reasons = n_reasons + 1, score = score + 0.1 WHERE id=?",
-                            (dup["id"],))
-            return None
-        cur = self.db.execute(
-            "INSERT INTO frontier(entity_id, territory, reason, score, hops, state) VALUES (?,?,?,?,?,?)",
-            (entity_id, territory, json.dumps(reason.__dict__), score, hops, state))
-        return cur.lastrowid
+    # ---- facts --------------------------------------------------------------------
+    def facts_about(self, eid: str, include_superseded: bool = False) -> list[dict[str, Any]]:
+        q = "SELECT * FROM facts WHERE subject_id=?" + ("" if include_superseded else " AND superseded_by IS NULL")
+        return [self._fact(r) for r in self.db.execute(q + " ORDER BY id", (eid,))]
 
-    def pop_frontier(self, territory: str) -> FrontierItem | None:
-        r = self.db.execute("SELECT * FROM frontier WHERE territory=? AND state='queued' ORDER BY score DESC, id LIMIT 1",
-                            (territory,)).fetchone()
-        if r is None:
-            return None
-        self.db.execute("UPDATE frontier SET state='in_progress' WHERE id=?", (r["id"],))
-        return FrontierItem(r["id"], r["entity_id"], r["territory"], Reason(**json.loads(r["reason"])),
-                            r["score"], r["hops"])
+    def facts_pointing_to(self, eid: str) -> list[dict[str, Any]]:
+        return [self._fact(r) for r in self.db.execute(
+            "SELECT * FROM facts WHERE object_id=? AND superseded_by IS NULL ORDER BY id", (eid,))]
 
-    def finish_frontier(self, item_id: int, state: str = "done") -> None:
-        self.db.execute("UPDATE frontier SET state=? WHERE id=?", (state, item_id))
-
-    def holding_count(self, territory: str) -> int:
-        """Reasons pointing at a territory that isn't open yet (DESIGN.md §1.5)."""
-        return self.db.execute("SELECT COALESCE(SUM(n_reasons), 0) FROM frontier WHERE territory=? AND state='holding'",
-                               (territory,)).fetchone()[0]
-
-    def release_holding(self, territory: str) -> int:
-        return self.db.execute("UPDATE frontier SET state='queued' WHERE territory=? AND state='holding'",
-                               (territory,)).rowcount
-
-    def frontier_counts(self) -> dict[str, int]:
-        return {r["state"]: r["n"] for r in self.db.execute("SELECT state, COUNT(*) n FROM frontier GROUP BY state")}
-
-    # ---- tasks ---------------------------------------------------------------
-    def task(self, tid: str) -> dict[str, Any] | None:
-        r = self.db.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
-        if r is None:
-            return None
+    @staticmethod
+    def _fact(r: sqlite3.Row) -> dict[str, Any]:
         d = dict(r)
-        d["reads"] = json.loads(d["reads"])
-        d["lookups"] = json.loads(d["lookups"])
+        d["source_ids"] = json.loads(d["source_ids"])
+        d["value"] = json.loads(d["value"]) if d["value"] is not None else None
         return d
 
-    def save_task(self, tid: str, question: str, user_id: str, reads: list, lookups: list) -> None:
-        self.db.execute("INSERT OR REPLACE INTO tasks(id, question, user_id, reads, lookups) VALUES (?,?,?,?,?)",
-                        (tid, question, user_id, json.dumps(reads), json.dumps(lookups)))
+    def neighbors(self, eid: str) -> list[tuple[str, dict[str, Any]]]:
+        """(other dossier, the fact that links them), both directions, current facts only."""
+        out = [(f["object_id"], f) for f in self.facts_about(eid) if f["object_id"]]
+        out += [(f["subject_id"], f) for f in self.facts_pointing_to(eid)]
+        return out
+
+    # ---- frontier -----------------------------------------------------------------
+    def frontier_add(self, person_id: str, reason: dict, hops: int, asked: bool = False) -> int | None:
+        row = self.db.execute("SELECT id FROM frontier WHERE person_id=? AND state IN ('queued','claimed')",
+                              (person_id,)).fetchone()
+        if row:   # another independent reason for the same person
+            self.db.execute("UPDATE frontier SET n_reasons=n_reasons+1, asked=MAX(asked, ?), hops=MIN(hops, ?) WHERE id=?",
+                            (int(asked), hops, row["id"]))
+            return None
+        if self.entity(person_id)["status"] in ("researched", "ambiguous"):
+            return None
+        return self.db.execute("INSERT INTO frontier(person_id, reason, hops, asked) VALUES (?,?,?,?)",
+                               (person_id, json.dumps(reason), hops, int(asked))).lastrowid
+
+    def frontier_queued(self) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT * FROM frontier WHERE state='queued' ORDER BY id")
+        return [{**dict(r), "reason": json.loads(r["reason"])} for r in rows]
+
+    def frontier_set(self, fid: int, state: str) -> None:
+        self.db.execute("UPDATE frontier SET state=? WHERE id=?", (state, fid))
+
+    def counts(self) -> dict[str, Any]:
+        q = lambda s: self.db.execute(s).fetchone()[0]  # noqa: E731
+        return {"dossiers": q("SELECT COUNT(*) FROM entities WHERE status!='merged'"),
+                "researched": q("SELECT COUNT(*) FROM entities WHERE status='researched'"),
+                "facts": q("SELECT COUNT(*) FROM facts WHERE superseded_by IS NULL"),
+                "links": q("SELECT COUNT(*) FROM facts WHERE object_id IS NOT NULL AND superseded_by IS NULL"),
+                "frontier": q("SELECT COUNT(*) FROM frontier WHERE state='queued'"),
+                "ambiguous": q("SELECT COUNT(*) FROM entities WHERE status='ambiguous'")}

@@ -2,39 +2,39 @@
 
 AIM Labs, fall 2026: Amy Lin, Audrey, Dominik Bach, Rebecca.
 
-A knowledge graph of people and their professional networks, built by **following the people trail**. It starts from MIT, and goes out to other institutions, companies and funds, from public data gathered only in ways each source allows. An AI agent navigates the graph through an MCP server.
+**Following people grows the graph. The graph is what the people trail finds, written as dossiers that agents navigate.**
 
-- `docs/PRD.md`: what we're building, and why.
+It starts from MIT, follows each person's connections to the next people, labs, colleges, companies and funds, and writes what public sources say into one graph of dossiers. An AI agent navigates it through an MCP server: it gets starting points, never answers.
+
 - `docs/DESIGN.md`: the high-level and low-level design. **Start here.**
+- `docs/PRD.md`: the problem, the users, and the data sources' terms.
 
 ## Run it (synthetic people only)
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"            # add ",api" for the MCP server
-pytest -q                          # the trail grows, every fact is sourced, borders open territories
-python scripts/demo_synthetic.py   # one run of the trail on a made-up world
+pytest -q
+python scripts/demo_synthetic.py   # the trail on a made-up world, and one dossier
 ```
 
 ## What's here
 
 | Path | What | Design |
 |---|---|---|
-| `schema/` | SQL schema v0, link types, territory settings | §2.1, §2.2, §1.5 |
-| `aimkg/models.py` | entity refs, evidence, claims, reasons, frontier items | §2.1 |
-| `aimkg/store.py` | the graph, the evidence archive and the frontier (SQLite for week 1) | §2.5 |
-| `aimkg/connectors/` | the connector interface, and a synthetic source; one module per real source | §2.4, §2.6 |
-| `aimkg/router.py` | picks the sources that cover an entity, inside their rules | §1.3 |
-| `aimkg/control.py` | budgets, hop limits, opening territories | §1.5, §2.3 |
-| `aimkg/frontier.py` | frontier scoring: why the next lookup is the next lookup | §2.3 |
-| `aimkg/territory.py` | one turn of the trail, border handoffs | §1.6, §2.3 |
-| `aimkg/extract.py`, `resolve.py` | evidence → claims; is this someone we have? | §2.4 |
-| `aimkg/checks.py` | graph checks | §2.8 |
-| `aimkg/api_core.py`, `api.py` | the five Agent API calls, and the MCP server | §2.7 |
+| `schema/` | SQL schema (entities, facts, sources, frontier), fact types, the trail's settings | §2.2, §2.4 |
+| `aimkg/connectors/` | the connector interface, and three synthetic sources that chain like real ones | §2.1 |
+| `aimkg/research.py` | `research(p)`: IDs first, fan out, stop when dry, write nothing on a weak match | §2.3 |
+| `aimkg/trail.py` | the frontier, `select` (expected information gain, a little exploration), the loop | §2.2 |
+| `aimkg/upkeep.py` | writing facts to dossiers: one fact for many sources, newer supersedes older, merges | §2.4, §2.5 |
+| `aimkg/groupings.py` | groupings computed from the links, never assigned | §2.4 |
+| `aimkg/checks.py` | checks after each batch | §2.5 |
+| `aimkg/api_core.py`, `api.py` | the agent's way in: `open_task`, `read_dossier`, `next_degree`, `follow_person`, `continue_task` | §2.6 |
+| `eval/` | the three arms, and the question format | §2.7 |
 
 ## Rules
 
-- **Raw data about people never goes in this repo.** Point the store at the team's private store. The repo holds code, the schema, and synthetic fixtures only.
-- **Public data only, gathered only in ways each source allows.** A connector writes its source's rules into `SourceRules`, from the source's own terms page.
-- **Demographics: only what a person states publicly.** Never infer protected traits.
+- **Raw data about people never goes in this repo.** The repo holds code, the schema, and synthetic fixtures only.
+- **Public data only, gathered only in ways each source allows.** Each connector writes its source's rules from that source's own terms page.
+- **Demographics only as people state them publicly.** Never infer protected traits.
 - Every change goes in through a PR.

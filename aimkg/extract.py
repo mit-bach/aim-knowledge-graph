@@ -1,38 +1,25 @@
-"""Extractor (DESIGN.md §2.4): evidence -> claims, each with the span it came from."""
+"""Records -> fact drafts (docs/DESIGN.md §2.3)."""
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from .models import Claim, EntityRef
+from .models import FactDraft, Record, Ref
 
 
-def _ref(d: dict[str, Any]) -> EntityRef:
-    return EntityRef(d["kind"], d["name"], d.get("territory_path", []), d.get("ids", {}))
+def _ref(d: dict[str, Any] | None) -> Ref | None:
+    return Ref(d["kind"], d["name"], d.get("ids", {})) if d else None
 
 
-class StructuredExtractor:
-    """For sources that return structured records (APIs, the synthetic source)."""
-
-    def extract(self, evidence_row: dict[str, Any]) -> list[Claim]:
-        p = json.loads(evidence_row["payload"])
-        subject = _ref(p["subject"])
-        claims = [Claim(subject, f"attr:{k}", v, 0.9, {"field": k}) for k, v in p.get("attributes", {}).items()]
-        for ln in p.get("links", []):
-            obj = _ref(ln["object"])
-            s, o = (obj, subject) if ln.get("reverse") else (subject, obj)
-            claims.append(Claim(s, ln["link_path"], o, ln.get("confidence", 0.5),
-                                {"desc": ln.get("desc", "")}))
-        return claims
+def structured(rec: Record) -> list[FactDraft]:
+    """For sources that return structured records (APIs, dumps, the synthetic sources)."""
+    return [FactDraft(subject=_ref(f["subject"]), predicate=f["predicate"], object=_ref(f.get("object")),
+                      value=f.get("value"), text=f.get("text", ""), valid_from=f.get("valid_from"),
+                      confidence=f.get("confidence", 0.8))
+            for f in rec.payload.get("facts", [])]
 
 
-class LLMExtractor:
-    """For text (proxy bios, theses, news, personal pages). Week 2.
-
-    Contract: given the evidence text, return claims whose predicate is a link_path from
-    schema/link_types.yaml or "attr:<key>", each with the exact span (start, end, text).
-    Demographics: only what the person states about themselves. Never infer protected traits.
-    """
-
-    def extract(self, evidence_row: dict[str, Any]) -> list[Claim]:
-        raise NotImplementedError("LLM extraction is week 2 (docs/DESIGN.md §2.11)")
+def from_text(rec: Record) -> list[FactDraft]:
+    """For pages and filings in prose. Week 2: an LLM returns facts whose predicate is in
+    schema/fact_types.yaml, each with the exact span it came from. Self-stated attributes only;
+    never infer protected traits."""
+    raise NotImplementedError("text extraction is week 2 (docs/DESIGN.md §2.9)")

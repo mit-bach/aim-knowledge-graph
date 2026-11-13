@@ -1,9 +1,0 @@
-# Territory scheme, v0 (DESIGN.md §1.5). Levels: 1 institution or company, 2 school/department, 3 lab/group.
-open_threshold: 10        # reasons pointing at a new territory before it opens
-split_entities: 2000      # split a territory past this many entities
-split_frontier: 500
-max_hops_inside: 2
-max_hops_past_border: 1
-seed:
-  - path: "1::mit"
-    budget: 200

@@ -1,0 +1,8 @@
+# The trail's settings (docs/DESIGN.md §2.2). Starting points; tune against evals.
+daily_budget: 200          # people researched per day
+calls_per_person: 6        # source calls per person, at most
+dry_after: 2               # stop researching a person after this many calls add nothing
+max_hops: 3                # relevance decays with hops; past this, nobody is picked
+explore_share: 0.1         # about 1 pick in 10 is random
+identity_threshold: 0.7    # below this, nothing is written; the person waits for a teammate
+weights: {novelty: 1.0, bridging: 1.0, relevance: 1.0, evidence: 1.0, cost: 1.0}

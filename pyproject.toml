@@ -1,7 +1,7 @@
 [project]
 name = "aimkg"
-version = "0.1.0"
-description = "AIM knowledge graph: follow the people trail"
+version = "0.2.0"
+description = "AIM knowledge graph: following people grows the graph"
 requires-python = ">=3.11"
 dependencies = ["pyyaml>=6"]
 

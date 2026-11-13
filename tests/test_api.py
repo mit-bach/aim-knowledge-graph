@@ -1,33 +1,32 @@
 from aimkg.api_core import AgentAPI
 
 
-def test_open_get_read(world):
-    store, *_ , mit = world
-    mit.run(10)
-    api = AgentAPI(store)
-    t = api.open_task("Who is Synthetic Person 0001 connected to?", user_id="test")
-    assert t["init_entities"]
-    names = api.get_entities(t["init_entities"])
-    assert names
-    doc = api.read_entity(t["init_entities"][0], link_verbosity="evidence",
-                          reason_for_reading="find their coauthors", task_id=t["task_id"])
-    assert doc["synthetic"] is True
-    assert all(ln["evidence"] for ln in doc["links"])
-    assert "relevance" not in doc
+def test_starting_points_never_answers(world):
+    store, trail = world
+    trail.run(25)
+    api = AgentAPI(store, trail)
+    t = api.open_task("Who is Synthetic Person 0001 connected to?", "test")
+    assert t["starting_dossiers"] and "answer" not in t
+    d = api.read_dossier(t["starting_dossiers"][0]["id"], reason="who they work with", task_id=t["task_id"])
+    assert d["synthetic"] and all(f["sources"] for f in d["facts"])
+    assert "usefulness" not in d and "dossier:" in d["markdown"]
+    reads = store.db.execute("SELECT reason FROM reads WHERE task_id=?", (t["task_id"],)).fetchall()
+    assert reads[0]["reason"] == "who they work with"
 
 
-def test_link_filter(world):
-    store, *_ , mit = world
-    mit.run(10)
-    api = AgentAPI(store)
-    eid = api.open_task("Synthetic Person 0001", "test")["init_entities"][0]
-    doc = api.read_entity(eid, link_filter=(["research"], []))
-    assert all(ln["link_path"].startswith("research") for ln in doc["links"])
+def test_next_degree_goes_out_one_link(world):
+    store, trail = world
+    trail.run(25)
+    api = AgentAPI(store, trail)
+    start = api.open_task("Synthetic Person 0001", "test")["starting_dossiers"][0]["id"]
+    out = api.next_degree([start])[start]
+    assert out and all(r["via"] and r["fact"] for r in out)
+    only = api.next_degree([start], link_types=["research"])[start]
+    assert all(r["via"].startswith("research") for r in only)
 
 
-def test_request_lookup_puts_it_on_the_frontier(world):
-    store, *_ = world
-    api = AgentAPI(store)
-    t = api.open_task("Synthetic Person 9999", "test")
-    r = api.request_lookup("Synthetic Person 9999", reason="asked about, not in the graph", task_id=t["task_id"])
-    assert r["state"] == "queued" and r["frontier_item_id"]
+def test_follow_person_queues_them(world):
+    store, trail = world
+    api = AgentAPI(store, trail)
+    r = api.follow_person("Synthetic Person 0399", "asked about, not in the graph")
+    assert r["state"] == "queued" and r["frontier_id"]

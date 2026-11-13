@@ -1,1 +1,1 @@
-"""AIM knowledge graph: follow the people trail (docs/DESIGN.md)."""
+"""AIM knowledge graph: following people grows the graph (docs/DESIGN.md)."""

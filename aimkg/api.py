@@ -1,47 +1,46 @@
-"""The Agent API as an MCP server (DESIGN.md §2.7). Run: python -m aimkg.api --db path/to/graph.sqlite"""
+"""The agent's way in, as an MCP server (docs/DESIGN.md §2.6).
+Run: pip install -e ".[api]" && python -m aimkg.api --db path/to/graph.sqlite"""
 from __future__ import annotations
 
 import argparse
 
 from .api_core import AgentAPI
+from .connectors import synthetic_sources
 from .store import Store
+from .trail import Trail
 
 
 def build(db_path: str):
-    from mcp.server.fastmcp import FastMCP  # pip install -e ".[api]"
+    from mcp.server.fastmcp import FastMCP
 
-    api = AgentAPI(Store(db_path))
+    store = Store(db_path)
+    api = AgentAPI(store, Trail(store, synthetic_sources()))   # swap in the real connectors
     mcp = FastMCP("aim-knowledge-graph")
 
     @mcp.tool()
     def open_task(question: str, user_id: str, task_id: str | None = None) -> dict:
-        """Open a task. Returns entities to read first, and the territory filter later calls use."""
+        """Starting dossiers for this question. Never the answer: explore from here."""
         return api.open_task(question, user_id, task_id)
 
     @mcp.tool()
-    def get_entities(entity_ids: list[str]) -> dict:
-        """Names, territory paths and link-type counts for a list of entities: what to read next."""
-        return api.get_entities(entity_ids)
+    def read_dossier(dossier_id: str, reason: str, task_id: str | None = None, links: str = "facts") -> dict:
+        """One dossier: its facts, each with sources, and its links out and in. Say why you're reading it."""
+        return api.read_dossier(dossier_id, reason, task_id, links)
 
     @mcp.tool()
-    def read_entity(entity_id: str, reason_for_reading: str, task_id: str | None = None,
-                    territory_include: list[str] | None = None, territory_exclude: list[str] | None = None,
-                    link_include: list[str] | None = None, link_exclude: list[str] | None = None,
-                    link_verbosity: str = "description") -> dict:
-        """One entity, its attributes and its links, each traceable to a source."""
-        tf = (territory_include or [], territory_exclude or []) if (territory_include or territory_exclude) else None
-        lf = (link_include or [], link_exclude or []) if (link_include or link_exclude) else None
-        return api.read_entity(entity_id, tf, lf, None, link_verbosity, reason_for_reading, task_id)
+    def next_degree(dossier_ids: list[str], task_id: str | None = None, link_types: list[str] | None = None) -> dict:
+        """The dossiers one link away, each with the fact that links it."""
+        return api.next_degree(dossier_ids, task_id, link_types)
+
+    @mcp.tool()
+    def follow_person(name: str, reason: str, task_id: str | None = None) -> dict:
+        """The graph doesn't hold this person: the trail will follow them."""
+        return api.follow_person(name, reason, task_id)
 
     @mcp.tool()
     def continue_task(question: str, task_id: str) -> dict:
-        """Continue a task with a follow-up question."""
+        """A follow-up question in the same task."""
         return api.continue_task(question, task_id)
-
-    @mcp.tool()
-    def request_lookup(name_or_id: str, reason: str, task_id: str | None = None) -> dict:
-        """The graph doesn't hold it: put it on the frontier, with your reason."""
-        return api.request_lookup(name_or_id, reason, task_id)
 
     return mcp
 

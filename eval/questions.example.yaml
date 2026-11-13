@@ -1,0 +1,9 @@
+# Format only. These are placeholders, not real people or answers.
+- id: q-example-1
+  use: due diligence on the people behind a fund
+  question: "Who are Fund B's partners, and where did each of them study?"
+  answer: null          # a checked answer, or null when it's judged side by side
+- id: q-example-2
+  use: talent flows
+  question: "Which MIT labs have the most alumni now at trading firms?"
+  answer: null
